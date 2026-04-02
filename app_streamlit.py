@@ -1,6 +1,5 @@
 import streamlit as st
 import json
-import matplotlib.pyplot as plt
 from datetime import date
 
 # -------------------------------
@@ -17,27 +16,17 @@ except:
 def predict_category(description):
     description = description.lower()
 
-    food_items = ["food", "hotel", "idly", "dosa", "biryani", "meal", "pizza", "burger", "roti"]
-    grocery_items = ["milk", "eggs", "vegetables", "rice", "dal", "oil", "fruits", "atta", "sugar"]
-    clothes_items = ["shirt", "pant", "jeans", "dress"]
-    travel_items = ["bus", "uber", "train", "auto", "petrol"]
-    sports_items = ["bat", "ball", "football"]
-
-    if any(word in description for word in food_items):
+    if any(x in description for x in ["food", "dosa", "idly", "pizza", "burger"]):
         return "Food"
-    elif any(word in description for word in grocery_items):
+    elif any(x in description for x in ["milk", "eggs", "vegetables", "rice"]):
         return "Groceries"
-    elif any(word in description for word in clothes_items):
-        return "Clothes"
-    elif any(word in description for word in travel_items):
+    elif any(x in description for x in ["bus", "uber", "train", "petrol"]):
         return "Travel"
-    elif any(word in description for word in sports_items):
-        return "Sports items"
     else:
         return "Other"
 
 # -------------------------------
-# FINAL PREDICTION (ML + FALLBACK)
+# FINAL PREDICTION
 # -------------------------------
 def final_prediction(description):
     try:
@@ -49,7 +38,7 @@ def final_prediction(description):
         return predict_category(description)
 
 # -------------------------------
-# LOAD / SAVE DATA
+# DATA HANDLING
 # -------------------------------
 def load_data():
     try:
@@ -77,27 +66,14 @@ def category_summary(expenses):
     return summary
 
 # -------------------------------
-# PAGE CONFIG
+# UI
 # -------------------------------
 st.set_page_config(page_title="Smart Expense Tracker", layout="wide")
 
-# -------------------------------
-# SIDEBAR
-# -------------------------------
-st.sidebar.title("⚙️ Controls")
-
-if st.sidebar.button("🗑 Clear All Data"):
-    save_data([])
-    st.sidebar.success("Data Cleared!")
-    st.rerun()
-
-# -------------------------------
-# TITLE
-# -------------------------------
 st.title("💰 Smart Expense Tracker")
 
 # -------------------------------
-# INPUT SECTION
+# ADD EXPENSE
 # -------------------------------
 st.subheader("Add Expense")
 
@@ -110,37 +86,27 @@ predicted_category = final_prediction(description) if description else ""
 if description:
     st.info(f"Predicted Category: {predicted_category}")
 
-    # SELF-LEARNING CORRECTION
-    categories = ["Food", "Groceries", "Clothes", "Travel", "Sports items", "Shopping", "Other"]
+    categories = ["Food", "Groceries", "Travel", "Shopping", "Other"]
 
     corrected_category = st.selectbox(
-        "Change category if wrong:",
+        "Correct Category (if needed):",
         categories,
         index=categories.index(predicted_category) if predicted_category in categories else 0
     )
 
-# -------------------------------
-# ADD EXPENSE
-# -------------------------------
 if st.button("Add Expense"):
     if amount > 0 and description:
 
-        final_category = corrected_category if description else "Other"
-
-        new_expense = {
+        expenses.append({
             "amount": amount,
-            "category": final_category,
+            "category": corrected_category,
             "description": description,
             "date": str(selected_date)
-        }
+        })
 
-        expenses.append(new_expense)
         save_data(expenses)
-
-        st.success(f"Saved as: {final_category}")
+        st.success("Expense Added!")
         st.rerun()
-    else:
-        st.warning("Please enter valid details")
 
 # -------------------------------
 # DASHBOARD
@@ -150,36 +116,58 @@ st.subheader("Dashboard")
 total = calculate_total(expenses)
 summary = category_summary(expenses)
 
-col1, col2 = st.columns(2)
-col1.metric("Total Expense", f"₹{total}")
-col2.metric("Categories", len(summary))
+today = str(date.today())
+today_total = sum(e["amount"] for e in expenses if e["date"] == today)
+
+top_category = max(summary, key=summary.get) if summary else "None"
+
+# SMART CARDS
+col1, col2, col3, col4 = st.columns(4)
+
+col1.metric("Total", f"₹{total}")
+col2.metric("Today", f"₹{today_total}")
+col3.metric("🏆 Top Category", top_category)
+col4.metric("Entries", len(expenses))
 
 # -------------------------------
-# CATEGORY SUMMARY
+# SMART INSIGHTS
 # -------------------------------
-st.write("Category Breakdown")
-st.json(summary)
+st.subheader("Smart Insights")
 
-# -------------------------------
-# GRAPH
-# -------------------------------
 if summary:
-    st.write("Expense Distribution")
+    max_cat = max(summary, key=summary.get)
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.bar(summary.keys(), summary.values())
+    if max_cat == "Food":
+        st.warning("High spending on Food. Try reducing outside eating.")
+    elif max_cat == "Travel":
+        st.warning("Travel cost is high. Consider optimizing routes.")
+    elif max_cat == "Shopping":
+        st.warning("Shopping is high. Avoid unnecessary purchases.")
+    else:
+        st.success("Spending looks balanced. Good job!")
 
-    plt.xticks(rotation=30)
-    ax.set_title("Expense Distribution")
-    ax.set_xlabel("Category")
-    ax.set_ylabel("Amount")
+# -------------------------------
+# CATEGORY BREAKDOWN
+# -------------------------------
+st.subheader("📁 Category Breakdown")
 
-    st.pyplot(fig)
+if summary:
+    for cat, amt in summary.items():
+        st.write(f"{cat} → ₹{amt}")
 else:
-    st.info("No data to display")
+    st.info("No data yet")
 
 # -------------------------------
 # TABLE
 # -------------------------------
-st.write("📋 All Expenses")
+st.subheader("📋 All Expenses")
+
 st.dataframe(expenses)
+
+# -------------------------------
+# RESET
+# -------------------------------
+if st.button("🗑 Clear All Data"):
+    save_data([])
+    st.success("Data Cleared!")
+    st.rerun()
