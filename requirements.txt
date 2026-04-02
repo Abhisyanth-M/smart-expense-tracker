@@ -1,5 +1,5 @@
 streamlit==1.35.0
 pandas==2.1.4
 numpy==1.26.4
-pillow==10.0.1
-#rebuild
+pillow==9.5.2
+
