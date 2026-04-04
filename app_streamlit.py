@@ -1,173 +1,240 @@
 import streamlit as st
-import json
+import pandas as pd
+import sqlite3
 from datetime import date
+import plotly.express as px
 
 # -------------------------------
-# IMPORT ML MODEL
+# DATABASE
 # -------------------------------
-try:
-    from model import predict_category_ml
-except:
-    predict_category_ml = None
+conn = sqlite3.connect("expenses.db", check_same_thread=False)
+c = conn.cursor()
+
+# USERS TABLE
+c.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE,
+    password TEXT
+)
+""")
+
+# EXPENSES TABLE (USER LINKED)
+c.execute("""
+CREATE TABLE IF NOT EXISTS expenses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user TEXT,
+    amount REAL,
+    category TEXT,
+    description TEXT,
+    date TEXT
+)
+""")
+
+conn.commit()
 
 # -------------------------------
-# RULE-BASED FALLBACK
+# SESSION
 # -------------------------------
-def predict_category(description):
-    description = description.lower()
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
 
-    if any(x in description for x in ["food", "dosa", "idly", "pizza", "burger"]):
-        return "Food"
-    elif any(x in description for x in ["milk", "eggs", "vegetables", "rice"]):
-        return "Groceries"
-    elif any(x in description for x in ["bus", "uber", "train", "petrol"]):
-        return "Travel"
-    else:
-        return "Other"
+if "username" not in st.session_state:
+    st.session_state.username = ""
 
 # -------------------------------
-# FINAL PREDICTION
+# AUTH FUNCTIONS
 # -------------------------------
-def final_prediction(description):
+def create_user(username, password):
     try:
-        if predict_category_ml:
-            return predict_category_ml(description)
-        else:
-            return predict_category(description)
+        c.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
+        conn.commit()
+        return True
     except:
-        return predict_category(description)
+        return False
+
+def login_user(username, password):
+    c.execute("SELECT * FROM users WHERE username=? AND password=?", (username, password))
+    return c.fetchone()
 
 # -------------------------------
-# DATA HANDLING
+# ML CATEGORY
 # -------------------------------
-def load_data():
-    try:
-        with open("data.json", "r") as f:
-            return json.load(f)
-    except:
-        return []
+def predict_category(text):
+    text = text.lower()
 
-def save_data(data):
-    with open("data.json", "w") as f:
-        json.dump(data, f, indent=4)
+    keywords = {
+        "Food": ["idli", "idly", "dosa", "food", "hotel", "meal", "biryani", "chapati", "breakfast", "lunch", "dinner", "roti", "naan", "pizza", "burger", "sandwich"],
+        "Travel": ["uber", "bus", "train", "petrol", "flight"],
+        "Bills": ["rent", "electricity", "bill", "wifi"],
+        "Shopping": ["shirt", "clothes", "amazon", "flipkart"],
+        "Groceries": ["milk", "vegetables", "rice", "dal", "eggs"],
+        "Entertainment": ["movie", "netflix", "spotify"]
+    }
 
-expenses = load_data()
+    for category, words in keywords.items():
+        if any(word in text for word in words):
+            return category
 
-# -------------------------------
-# CALCULATIONS
-# -------------------------------
-def calculate_total(expenses):
-    return sum(e["amount"] for e in expenses)
-
-def category_summary(expenses):
-    summary = {}
-    for e in expenses:
-        summary[e["category"]] = summary.get(e["category"], 0) + e["amount"]
-    return summary
+    return "Other"
 
 # -------------------------------
-# UI
+# DB FUNCTIONS
 # -------------------------------
-st.set_page_config(page_title="Smart Expense Tracker", layout="wide")
+def add_expense(user, amount, category, description, date):
+    c.execute("INSERT INTO expenses (user, amount, category, description, date) VALUES (?, ?, ?, ?, ?)",
+              (user, amount, category, description, date))
+    conn.commit()
 
+def get_data(user):
+    return pd.read_sql("SELECT * FROM expenses WHERE user=?", conn, params=(user,))
+
+def delete_expense(expense_id):
+    c.execute("DELETE FROM expenses WHERE id=?", (expense_id,))
+    conn.commit()
+
+def update_expense(expense_id, amount, description):
+    category = predict_category(description)
+    c.execute("""
+        UPDATE expenses 
+        SET amount=?, description=?, category=? 
+        WHERE id=?
+    """, (amount, description, category, expense_id))
+    conn.commit()
+
+def clear_all(user):
+    c.execute("DELETE FROM expenses WHERE user=?", (user,))
+    conn.commit()
+
+# -------------------------------
+# LOGIN UI
+# -------------------------------
+if not st.session_state.logged_in:
+
+    st.title("🔐 Smart Expense Tracker Login")
+
+    menu = st.radio("Select", ["Login", "Signup"])
+
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if menu == "Signup":
+        if st.button("Create Account"):
+            if create_user(username, password):
+                st.success("Account created! Now login.")
+            else:
+                st.error("Username already exists")
+
+    if menu == "Login":
+        if st.button("Login"):
+            user = login_user(username, password)
+            if user:
+                st.session_state.logged_in = True
+                st.session_state.username = username
+                st.success("Login successful!")
+                st.rerun()
+            else:
+                st.error("Invalid credentials")
+
+    st.stop()
+
+# -------------------------------
+# MAIN APP
+# -------------------------------
 st.title("💰 Smart Expense Tracker")
+
+# LOGOUT
+if st.sidebar.button("Logout"):
+    st.session_state.logged_in = False
+    st.session_state.username = ""
+    st.rerun()
+
+menu = st.sidebar.radio("Navigation", ["Add Expense", "Dashboard"])
+
+user = st.session_state.username
 
 # -------------------------------
 # ADD EXPENSE
 # -------------------------------
-st.subheader("Add Expense")
+if menu == "Add Expense":
+    st.header("Add Expense")
 
-amount = st.number_input("Enter amount", min_value=0)
-description = st.text_input("Enter description")
-selected_date = st.date_input("Select date", value=date.today())
+    amount = st.number_input("Amount", min_value=0.0, format="%.2f")
+    description = st.text_input("Description")
+    selected_date = st.date_input("Date", value=date.today())
 
-predicted_category = final_prediction(description) if description else ""
+    if description:
+        predicted = predict_category(description)
+        st.success(f"Auto Category: {predicted}")
+    else:
+        predicted = "Other"
 
-if description:
-    st.info(f"Predicted Category: {predicted_category}")
-
-    categories = ["Food", "Groceries", "Travel", "Shopping", "Other"]
-
-    corrected_category = st.selectbox(
-        "Correct Category (if needed):",
-        categories,
-        index=categories.index(predicted_category) if predicted_category in categories else 0
-    )
-
-if st.button("Add Expense"):
-    if amount > 0 and description:
-
-        expenses.append({
-            "amount": amount,
-            "category": corrected_category,
-            "description": description,
-            "date": str(selected_date)
-        })
-
-        save_data(expenses)
+    if st.button("Add Expense"):
+        add_expense(user, amount, predicted, description, str(selected_date))
         st.success("Expense Added!")
-        st.rerun()
 
 # -------------------------------
 # DASHBOARD
 # -------------------------------
-st.subheader("Dashboard")
+if menu == "Dashboard":
+    st.header("Dashboard")
 
-total = calculate_total(expenses)
-summary = category_summary(expenses)
+    df = get_data(user)
 
-today = str(date.today())
-today_total = sum(e["amount"] for e in expenses if e["date"] == today)
-
-top_category = max(summary, key=summary.get) if summary else "None"
-
-# SMART CARDS
-col1, col2, col3, col4 = st.columns(4)
-
-col1.metric("Total", f"₹{total}")
-col2.metric("Today", f"₹{today_total}")
-col3.metric("🏆 Top Category", top_category)
-col4.metric("Entries", len(expenses))
-
-# -------------------------------
-# SMART INSIGHTS
-# -------------------------------
-st.subheader("Smart Insights")
-
-if summary:
-    max_cat = max(summary, key=summary.get)
-
-    if max_cat == "Food":
-        st.warning("High spending on Food. Try reducing outside eating.")
-    elif max_cat == "Travel":
-        st.warning("Travel cost is high. Consider optimizing routes.")
-    elif max_cat == "Shopping":
-        st.warning("Shopping is high. Avoid unnecessary purchases.")
+    if df.empty:
+        st.warning("No data available")
     else:
-        st.success("Spending looks balanced. Good job!")
+        df["date"] = pd.to_datetime(df["date"]).dt.date
 
-# -------------------------------
-# CATEGORY BREAKDOWN
-# -------------------------------
-st.subheader("📁 Category Breakdown")
+        # METRICS
+        total = df["amount"].sum()
+        today = df[df["date"] == date.today()]["amount"].sum()
+        entries = len(df)
 
-if summary:
-    for cat, amt in summary.items():
-        st.write(f"{cat} → ₹{amt}")
-else:
-    st.info("No data yet")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total", f"₹{total}")
+        col2.metric("Today", f"₹{today}")
+        col3.metric("Entries", entries)
 
-# -------------------------------
-# TABLE
-# -------------------------------
-st.subheader("📋 All Expenses")
+        # GRAPH
+        st.subheader("Monthly Spending")
+        df["month"] = pd.to_datetime(df["date"]).dt.to_period("M").astype(str)
+        monthly = df.groupby("month")["amount"].sum().reset_index()
 
-st.dataframe(expenses)
+        fig = px.bar(monthly, x="month", y="amount")
+        st.plotly_chart(fig, use_container_width=True)
 
-# -------------------------------
-# RESET
-# -------------------------------
-if st.button("🗑 Clear All Data"):
-    save_data([])
-    st.success("Data Cleared!")
-    st.rerun()
+        # CATEGORY
+        st.subheader("📂 Category Breakdown")
+        summary = df.groupby("category")["amount"].sum()
+
+        for cat, amt in summary.items():
+            st.write(f"{cat} → ₹{amt}")
+
+        # EDIT + DELETE
+        st.subheader("Manage Expenses")
+
+        for i, row in df.iterrows():
+            with st.expander(f"{row['description']} - ₹{row['amount']} ({row['date']})"):
+
+                new_amount = st.number_input("Edit Amount", value=row["amount"], key=f"a{row['id']}")
+                new_desc = st.text_input("Edit Description", value=row["description"], key=f"d{row['id']}")
+
+                col1, col2 = st.columns(2)
+
+                if col1.button("Update", key=f"u{row['id']}"):
+                    update_expense(row["id"], new_amount, new_desc)
+                    st.success("Updated!")
+                    st.rerun()
+
+                if col2.button("Delete", key=f"x{row['id']}"):
+                    delete_expense(row["id"])
+                    st.warning("Deleted!")
+                    st.rerun()
+
+        # RESET
+        st.subheader("Reset")
+        if st.button("Clear All Data"):
+            clear_all(user)
+            st.success("All data cleared!")
+            st.rerun()
